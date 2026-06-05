@@ -7,7 +7,7 @@ Created on Fri Jun  5 17:01:11 2026
 
 # -*- coding: utf-8 -*-
 """
-Streamlit Web App for GBM + Optional PSO Model Development
+Streamlit Web App for GBM + Optional PSO Model Development (Developed by Amir Dashti, amirdashti13681990@gmail.com)
 
 Functions:
 1. Download Excel data template
@@ -15,9 +15,8 @@ Functions:
 3. Select train/test ratio
 4. Train or rerun Gradient Boosting model
 5. Optional PSO hyperparameter optimization
-6. Show R2, RMSE, MAPE (%)
-7. Show only R2 plot
-"""
+6. Results 
+
 
 import streamlit as st
 import pandas as pd
