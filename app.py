@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Streamlit Web App for XGBoost Model Development
+Streamlit Web App for XGBoost + Optional PSO Model Development
 
-Main functions:
+Functions:
 1. Download Excel data template
 2. Upload completed Excel file
 3. Select train/test ratio
 4. Train or rerun XGBoost model
-5. Show only R2 plot and R2 values
+5. Optional PSO hyperparameter optimization
+6. Show R2, RMSE, MAPE (%)
+7. Show only R2 plot
 """
 
 import streamlit as st
@@ -18,8 +20,9 @@ import io
 import time
 
 from xgboost import XGBRegressor
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import r2_score
+from pyswarms.single.global_best import GlobalBestPSO
 
 
 # ============================================================
@@ -36,6 +39,29 @@ st.write(
     "Download the Excel template, fill your experimental data, upload the completed file, "
     "select the train/test ratio, and run or rerun the XGBoost model."
 )
+
+
+# ============================================================
+# Metric functions
+# ============================================================
+def compute_rmse(y_true, y_pred):
+    y_true = np.asarray(y_true).flatten()
+    y_pred = np.asarray(y_pred).flatten()
+    return np.sqrt(np.mean((y_true - y_pred) ** 2))
+
+
+def compute_mape(y_true, y_pred):
+    y_true = np.asarray(y_true).flatten()
+    y_pred = np.asarray(y_pred).flatten()
+
+    return np.mean(
+        np.divide(
+            np.abs(y_true - y_pred),
+            np.abs(y_true),
+            out=np.zeros_like(y_true, dtype=np.float64),
+            where=y_true != 0
+        )
+    ) * 100
 
 
 # ============================================================
@@ -63,6 +89,7 @@ def create_excel_template():
     template_df = pd.DataFrame(columns=template_columns)
 
     output = io.BytesIO()
+
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         template_df.to_excel(writer, index=False, sheet_name="Data Template")
 
@@ -70,6 +97,9 @@ def create_excel_template():
     return output
 
 
+# ============================================================
+# Step 1: Download template
+# ============================================================
 st.subheader("Step 1: Download Excel Template")
 
 template_file = create_excel_template()
@@ -87,7 +117,7 @@ st.info(
 
 
 # ============================================================
-# Upload completed Excel file
+# Step 2: Upload completed Excel file
 # ============================================================
 st.subheader("Step 2: Upload Completed Excel File")
 
@@ -115,16 +145,15 @@ if uploaded_file is not None:
     missing_columns = [col for col in template_columns if col not in df.columns]
 
     if len(missing_columns) > 0:
-        st.error("Your uploaded Excel file does not match the template.")
+        st.error("Your uploaded Excel file does not match the required template.")
         st.write("Missing columns:")
         st.write(missing_columns)
         st.stop()
 
     # --------------------------------------------------------
-    # Remove empty rows and convert to numeric
+    # Clean data
     # --------------------------------------------------------
     df = df[template_columns].copy()
-    df = df.dropna()
 
     for col in template_columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -138,7 +167,7 @@ if uploaded_file is not None:
     st.write(f"Valid data rows: **{df.shape[0]}**")
 
     # ========================================================
-    # Model settings
+    # Step 3: Model settings
     # ========================================================
     st.subheader("Step 3: Select Model Settings")
 
@@ -154,46 +183,123 @@ if uploaded_file is not None:
 
     st.write(f"Train/Test split: **{train_percent}/{test_percent}**")
 
-    n_estimators = st.sidebar.slider(
-        "n_estimators",
-        min_value=50,
-        max_value=1000,
-        value=300,
-        step=50
-    )
+    # ========================================================
+    # Sidebar settings
+    # ========================================================
+    st.sidebar.header("Model Settings")
 
-    max_depth = st.sidebar.slider(
-        "max_depth",
-        min_value=1,
-        max_value=20,
-        value=5,
-        step=1
-    )
+    use_pso = st.sidebar.checkbox("Use PSO optimization", value=True)
 
-    learning_rate = st.sidebar.slider(
-        "learning_rate",
-        min_value=0.001,
-        max_value=0.300,
-        value=0.050,
-        step=0.001,
-        format="%.3f"
-    )
+    if use_pso:
+        st.sidebar.subheader("PSO Settings")
 
-    subsample = st.sidebar.slider(
-        "subsample",
-        min_value=0.50,
-        max_value=1.00,
-        value=0.80,
-        step=0.05
-    )
+        n_particles = st.sidebar.slider(
+            "Number of particles",
+            min_value=5,
+            max_value=50,
+            value=10,
+            step=5
+        )
 
-    colsample_bytree = st.sidebar.slider(
-        "colsample_bytree",
-        min_value=0.50,
-        max_value=1.00,
-        value=0.80,
-        step=0.05
-    )
+        pso_iterations = st.sidebar.slider(
+            "PSO iterations",
+            min_value=5,
+            max_value=200,
+            value=30,
+            step=5
+        )
+
+        c1 = st.sidebar.number_input(
+            "PSO cognitive coefficient c1",
+            min_value=0.1,
+            max_value=5.0,
+            value=1.5,
+            step=0.1
+        )
+
+        c2 = st.sidebar.number_input(
+            "PSO social coefficient c2",
+            min_value=0.1,
+            max_value=5.0,
+            value=1.5,
+            step=0.1
+        )
+
+        w = st.sidebar.number_input(
+            "PSO inertia weight w",
+            min_value=0.1,
+            max_value=2.0,
+            value=0.7,
+            step=0.1
+        )
+
+        cv_folds = st.sidebar.slider(
+            "Cross-validation folds",
+            min_value=2,
+            max_value=10,
+            value=5,
+            step=1
+        )
+
+    else:
+        st.sidebar.subheader("Manual XGBoost Parameters")
+
+        n_estimators = st.sidebar.slider(
+            "n_estimators",
+            min_value=50,
+            max_value=1000,
+            value=300,
+            step=50
+        )
+
+        max_depth = st.sidebar.slider(
+            "max_depth",
+            min_value=1,
+            max_value=20,
+            value=5,
+            step=1
+        )
+
+        learning_rate = st.sidebar.slider(
+            "learning_rate",
+            min_value=0.001,
+            max_value=0.300,
+            value=0.050,
+            step=0.001,
+            format="%.3f"
+        )
+
+        subsample = st.sidebar.slider(
+            "subsample",
+            min_value=0.50,
+            max_value=1.00,
+            value=0.80,
+            step=0.05
+        )
+
+        colsample_bytree = st.sidebar.slider(
+            "colsample_bytree",
+            min_value=0.50,
+            max_value=1.00,
+            value=0.80,
+            step=0.05
+        )
+
+        min_child_weight = st.sidebar.slider(
+            "min_child_weight",
+            min_value=1.0,
+            max_value=20.0,
+            value=1.0,
+            step=0.5
+        )
+
+        gamma = st.sidebar.slider(
+            "gamma",
+            min_value=0.0,
+            max_value=10.0,
+            value=0.0,
+            step=0.1
+        )
 
     # ========================================================
     # Session state for rerun attempt
@@ -201,7 +307,13 @@ if uploaded_file is not None:
     if "attempt" not in st.session_state:
         st.session_state.attempt = 0
 
+    # ========================================================
+    # Step 4: Run model
+    # ========================================================
+    st.subheader("Step 4: Run or Rerun Model")
+
     if st.button("Run / Rerun XGBoost Model"):
+
         st.session_state.attempt += 1
 
         # Different random seed every click
@@ -222,14 +334,114 @@ if uploaded_file is not None:
         )
 
         # ----------------------------------------------------
-        # Train XGBoost model
+        # PSO optimization
+        # ----------------------------------------------------
+        if use_pso:
+
+            st.write("Running PSO optimization...")
+
+            progress_placeholder = st.empty()
+
+            def objective_function(params):
+                n_particles_local = params.shape[0]
+                scores = []
+
+                for i in range(n_particles_local):
+
+                    n_estimators_i = int(params[i, 0])
+                    learning_rate_i = params[i, 1]
+                    subsample_i = params[i, 2]
+                    max_depth_i = int(params[i, 3])
+                    min_child_weight_i = params[i, 4]
+                    gamma_i = params[i, 5]
+                    colsample_bytree_i = params[i, 6]
+
+                    temp_model = XGBRegressor(
+                        n_estimators=n_estimators_i,
+                        learning_rate=learning_rate_i,
+                        subsample=subsample_i,
+                        max_depth=max_depth_i,
+                        min_child_weight=min_child_weight_i,
+                        gamma=gamma_i,
+                        colsample_bytree=colsample_bytree_i,
+                        objective="reg:squarederror",
+                        n_jobs=-1,
+                        random_state=random_seed,
+                        verbosity=0
+                    )
+
+                    score = cross_val_score(
+                        temp_model,
+                        X_train,
+                        y_train,
+                        cv=cv_folds,
+                        scoring="r2",
+                        n_jobs=-1
+                    ).mean()
+
+                    scores.append(-score)
+
+                return np.array(scores)
+
+            # These are the 7 optimized XGBoost hyperparameters:
+            # 1. n_estimators
+            # 2. learning_rate
+            # 3. subsample
+            # 4. max_depth
+            # 5. min_child_weight
+            # 6. gamma
+            # 7. colsample_bytree
+            bounds = (
+                [50, 0.01, 0.50, 2, 1, 0, 0.30],
+                [500, 0.30, 1.00, 15, 20, 10, 1.00]
+            )
+
+            optimizer = GlobalBestPSO(
+                n_particles=n_particles,
+                dimensions=7,
+                options={
+                    "c1": c1,
+                    "c2": c2,
+                    "w": w
+                },
+                bounds=bounds
+            )
+
+            best_cost, best_pos = optimizer.optimize(
+                objective_function,
+                iters=pso_iterations,
+                verbose=False
+            )
+
+            best_params = {
+                "n_estimators": int(best_pos[0]),
+                "learning_rate": float(best_pos[1]),
+                "subsample": float(best_pos[2]),
+                "max_depth": int(best_pos[3]),
+                "min_child_weight": float(best_pos[4]),
+                "gamma": float(best_pos[5]),
+                "colsample_bytree": float(best_pos[6])
+            }
+
+            progress_placeholder.success("PSO optimization completed.")
+
+        else:
+
+            best_params = {
+                "n_estimators": int(n_estimators),
+                "learning_rate": float(learning_rate),
+                "subsample": float(subsample),
+                "max_depth": int(max_depth),
+                "min_child_weight": float(min_child_weight),
+                "gamma": float(gamma),
+                "colsample_bytree": float(colsample_bytree)
+            }
+
+        # ----------------------------------------------------
+        # Final XGBoost model
         # ----------------------------------------------------
         model = XGBRegressor(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            learning_rate=learning_rate,
-            subsample=subsample,
-            colsample_bytree=colsample_bytree,
+            **best_params,
             objective="reg:squarederror",
             random_state=random_seed,
             n_jobs=-1,
@@ -248,13 +460,32 @@ if uploaded_file is not None:
         y_all_pred = np.concatenate([y_train_pred, y_test_pred])
 
         # ----------------------------------------------------
-        # R2 values
+        # R2
         # ----------------------------------------------------
         r2_train = r2_score(y_train, y_train_pred)
         r2_test = r2_score(y_test, y_test_pred)
         r2_all = r2_score(y_all, y_all_pred)
 
+        # ----------------------------------------------------
+        # RMSE
+        # ----------------------------------------------------
+        rmse_train = compute_rmse(y_train, y_train_pred)
+        rmse_test = compute_rmse(y_test, y_test_pred)
+        rmse_all = compute_rmse(y_all, y_all_pred)
+
+        # ----------------------------------------------------
+        # MAPE
+        # ----------------------------------------------------
+        mape_train = compute_mape(y_train, y_train_pred)
+        mape_test = compute_mape(y_test, y_test_pred)
+        mape_all = compute_mape(y_all, y_all_pred)
+
+        # ====================================================
+        # Results
+        # ====================================================
         st.subheader("Model Results")
+
+        st.write(f"Model attempt number: **{st.session_state.attempt}**")
 
         col1, col2, col3 = st.columns(3)
 
@@ -262,7 +493,17 @@ if uploaded_file is not None:
         col2.metric("Test R²", f"{r2_test:.4f}")
         col3.metric("All Data R²", f"{r2_all:.4f}")
 
-        st.write(f"Model attempt number: **{st.session_state.attempt}**")
+        col4, col5, col6 = st.columns(3)
+
+        col4.metric("Train RMSE", f"{rmse_train:.4f}")
+        col5.metric("Test RMSE", f"{rmse_test:.4f}")
+        col6.metric("All Data RMSE", f"{rmse_all:.4f}")
+
+        col7, col8, col9 = st.columns(3)
+
+        col7.metric("Train MAPE (%)", f"{mape_train:.2f}")
+        col8.metric("Test MAPE (%)", f"{mape_test:.2f}")
+        col9.metric("All Data MAPE (%)", f"{mape_all:.2f}")
 
         # ====================================================
         # R2 plot only
@@ -302,6 +543,7 @@ if uploaded_file is not None:
         fit_line = np.polyval(p, y_all)
 
         sorted_index = np.argsort(y_all)
+
         ax.plot(
             y_all[sorted_index],
             fit_line[sorted_index],
@@ -316,11 +558,19 @@ if uploaded_file is not None:
         ax.text(
             0.05,
             0.95,
-            f"Train R² = {r2_train:.4f}\nTest R² = {r2_test:.4f}\nAll R² = {r2_all:.4f}",
+            f"Train R² = {r2_train:.4f}\n"
+            f"Test R² = {r2_test:.4f}\n"
+            f"All R² = {r2_all:.4f}\n"
+            f"Test RMSE = {rmse_test:.4f}\n"
+            f"Test MAPE = {mape_test:.2f}%",
             transform=ax.transAxes,
-            fontsize=12,
+            fontsize=11,
             verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
+            bbox=dict(
+                boxstyle="round",
+                facecolor="white",
+                alpha=0.8
+            )
         )
 
         ax.legend()
@@ -333,29 +583,44 @@ if uploaded_file is not None:
         # ====================================================
         st.subheader("Model Parameters")
 
-        params_df = pd.DataFrame([{
-            "n_estimators": n_estimators,
-            "max_depth": max_depth,
-            "learning_rate": learning_rate,
-            "subsample": subsample,
-            "colsample_bytree": colsample_bytree,
-            "random_seed": random_seed,
-            "train_percent": train_percent,
-            "test_percent": test_percent
-        }])
+        if use_pso:
+            params_df = pd.DataFrame([{
+                **best_params,
+                "use_pso": use_pso,
+                "n_particles": n_particles,
+                "dimensions": 7,
+                "pso_iterations": pso_iterations,
+                "c1": c1,
+                "c2": c2,
+                "w": w,
+                "cv_folds": cv_folds,
+                "random_seed": random_seed,
+                "train_percent": train_percent,
+                "test_percent": test_percent
+            }])
+        else:
+            params_df = pd.DataFrame([{
+                **best_params,
+                "use_pso": use_pso,
+                "random_seed": random_seed,
+                "train_percent": train_percent,
+                "test_percent": test_percent
+            }])
 
         st.dataframe(params_df)
 
         # ====================================================
-        # Message for rerun
+        # Rerun message
         # ====================================================
         if r2_test < 0.80:
             st.warning(
-                "The test R² is relatively low. You can click 'Run / Rerun XGBoost Model' again "
+                "The test R² is relatively low. Click 'Run / Rerun XGBoost Model' again "
                 "to try another random train/test split."
             )
         else:
-            st.success("The model result is acceptable based on the current train/test split.")
+            st.success(
+                "The model result is acceptable based on the current train/test split."
+            )
 
 else:
     st.warning("Please upload the completed Excel file after filling the template.")
