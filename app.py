@@ -9,11 +9,12 @@ Functions:
 4. Train or rerun Gradient Boosting model
 5. Optional PSO hyperparameter optimization
 6. Show R2, RMSE, MAPE (%)
-7. Show the R2 plot
+7. Show R2 plot
 8. Download Excel results:
    - Sheet 1: original data + predictions + train/test label
    - Sheet 2: hyperparameters + statistical results
 9. Download trained GBM model as .pkl
+10. Show PSO progress during optimization
 """
 
 import streamlit as st
@@ -210,7 +211,7 @@ if uploaded_file is not None:
             "PSO iterations",
             min_value=5,
             max_value=200,
-            value=100,
+            value=30,
             step=5
         )
 
@@ -406,11 +407,39 @@ if uploaded_file is not None:
                 bounds=bounds
             )
 
-            best_cost, best_pos = optimizer.optimize(
-                objective_function,
-                iters=pso_iterations,
-                verbose=False
-            )
+            # ====================================================
+            # PSO progress display
+            # ====================================================
+            progress_bar = st.progress(0)
+            progress_text = st.empty()
+            current_best_text = st.empty()
+
+            best_cost = None
+            best_pos = None
+
+            for iteration in range(pso_iterations):
+
+                best_cost, best_pos = optimizer.optimize(
+                    objective_function,
+                    iters=1,
+                    verbose=False
+                )
+
+                progress_percent = int(((iteration + 1) / pso_iterations) * 100)
+                progress_bar.progress(progress_percent)
+
+                current_r2 = -best_cost
+
+                progress_text.write(
+                    f"PSO progress: **{iteration + 1} / {pso_iterations} iterations completed** "
+                    f"({progress_percent}%)"
+                )
+
+                current_best_text.write(
+                    f"Current best cross-validation R²: **{current_r2:.4f}**"
+                )
+
+            progress_placeholder.success("PSO optimization completed.")
 
             best_params = {
                 "n_estimators": int(np.round(best_pos[0])),
@@ -425,8 +454,6 @@ if uploaded_file is not None:
             best_params["min_samples_split"] = max(best_params["min_samples_split"], 2)
             best_params["min_samples_leaf"] = max(best_params["min_samples_leaf"], 1)
             best_params["max_depth"] = max(best_params["max_depth"], 1)
-
-            progress_placeholder.success("PSO optimization completed.")
 
         else:
 
@@ -499,7 +526,7 @@ if uploaded_file is not None:
         col9.metric("All Data MAPE (%)", f"{mape_all:.2f}")
 
         # ====================================================
-        # R2 plot only
+        # R2 plot
         # ====================================================
         st.subheader("R² Plot")
 
