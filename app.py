@@ -1,13 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Jun  5 17:01:11 2026
-
-@author: 24550372
-"""
-
-# -*- coding: utf-8 -*-
-"""
-Streamlit Web App for GBM + Optional PSO Model Development (Developed by Amir Dashti, amirdashti13681990@gmail.com)
+Streamlit Web App for GBM + Optional PSO Model Development
 
 Functions:
 1. Download Excel data template
@@ -15,7 +8,12 @@ Functions:
 3. Select train/test ratio
 4. Train or rerun Gradient Boosting model
 5. Optional PSO hyperparameter optimization
-6. Results 
+6. Show R2, RMSE, MAPE (%)
+7. Show the R2 plot
+8. Download Excel results:
+   - Sheet 1: original data + predictions + train/test label
+   - Sheet 2: hyperparameters + statistical results
+9. Download trained GBM model as .pkl
 """
 
 import streamlit as st
@@ -24,6 +22,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io
 import time
+import joblib
 
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import train_test_split, cross_val_score
@@ -43,7 +42,7 @@ st.title("Web-Based Gradient Boosting Model Development App")
 
 st.write(
     "Download the Excel template, fill your experimental data, upload the completed file, "
-    "select the train/test ratio, and run or rerun the Gradient Boosting model."
+    "select the train/test ratio, and run or rerun the Gradient Boosting Machine model."
 )
 
 
@@ -71,7 +70,7 @@ def compute_mape(y_true, y_pred):
 
 
 # ============================================================
-# Excel template
+# Excel template columns
 # ============================================================
 template_columns = [
     "MW (g mol-1)",
@@ -146,7 +145,7 @@ if uploaded_file is not None:
     st.dataframe(df.head())
 
     # --------------------------------------------------------
-    # Check columns
+    # Check required columns
     # --------------------------------------------------------
     missing_columns = [col for col in template_columns if col not in df.columns]
 
@@ -323,9 +322,12 @@ if uploaded_file is not None:
         X = df.iloc[:, :-1].values
         y = df.iloc[:, -1].values
 
-        X_train, X_test, y_train, y_test = train_test_split(
+        row_indices = np.arange(len(df))
+
+        X_train, X_test, y_train, y_test, train_indices, test_indices = train_test_split(
             X,
             y,
+            row_indices,
             train_size=train_percent / 100,
             random_state=random_seed,
             shuffle=True
@@ -457,28 +459,22 @@ if uploaded_file is not None:
         y_all_pred = np.concatenate([y_train_pred, y_test_pred])
 
         # ----------------------------------------------------
-        # R2
+        # Statistical results
         # ----------------------------------------------------
         r2_train = r2_score(y_train, y_train_pred)
         r2_test = r2_score(y_test, y_test_pred)
         r2_all = r2_score(y_all, y_all_pred)
 
-        # ----------------------------------------------------
-        # RMSE
-        # ----------------------------------------------------
         rmse_train = compute_rmse(y_train, y_train_pred)
         rmse_test = compute_rmse(y_test, y_test_pred)
         rmse_all = compute_rmse(y_all, y_all_pred)
 
-        # ----------------------------------------------------
-        # MAPE
-        # ----------------------------------------------------
         mape_train = compute_mape(y_train, y_train_pred)
         mape_test = compute_mape(y_test, y_test_pred)
         mape_all = compute_mape(y_all, y_all_pred)
 
         # ====================================================
-        # Results
+        # Show results
         # ====================================================
         st.subheader("Model Results")
 
@@ -576,7 +572,7 @@ if uploaded_file is not None:
         st.pyplot(fig)
 
         # ====================================================
-        # Model parameters
+        # Model parameters table
         # ====================================================
         st.subheader("Model Parameters")
 
@@ -605,6 +601,93 @@ if uploaded_file is not None:
             }])
 
         st.dataframe(params_df)
+
+        # ====================================================
+        # Prepare Excel results
+        # ====================================================
+        st.subheader("Download Results and Trained Model")
+
+        # Sheet 1: original data + predictions + train/test label
+        train_results_df = df.iloc[train_indices].copy()
+        train_results_df["Predicted Degradation (%)"] = y_train_pred
+        train_results_df["Data Set"] = "Train"
+
+        test_results_df = df.iloc[test_indices].copy()
+        test_results_df["Predicted Degradation (%)"] = y_test_pred
+        test_results_df["Data Set"] = "Test"
+
+        results_df = pd.concat(
+            [train_results_df, test_results_df],
+            ignore_index=True
+        )
+
+        # Sheet 2: hyperparameters + statistical results
+        summary_df = pd.DataFrame([{
+            **best_params,
+
+            "use_pso": use_pso,
+            "n_particles": n_particles if use_pso else None,
+            "dimensions": 6 if use_pso else None,
+            "pso_iterations": pso_iterations if use_pso else None,
+            "c1": c1 if use_pso else None,
+            "c2": c2 if use_pso else None,
+            "w": w if use_pso else None,
+            "cv_folds": cv_folds if use_pso else None,
+
+            "random_seed": random_seed,
+            "train_percent": train_percent,
+            "test_percent": test_percent,
+
+            "R2_train": r2_train,
+            "R2_test": r2_test,
+            "R2_all": r2_all,
+
+            "RMSE_train": rmse_train,
+            "RMSE_test": rmse_test,
+            "RMSE_all": rmse_all,
+
+            "MAPE_train_percent": mape_train,
+            "MAPE_test_percent": mape_test,
+            "MAPE_all_percent": mape_all
+        }])
+
+        excel_buffer = io.BytesIO()
+
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            results_df.to_excel(
+                writer,
+                sheet_name="GBM Results",
+                index=False
+            )
+
+            summary_df.to_excel(
+                writer,
+                sheet_name="Hyperparameters_Statistics",
+                index=False
+            )
+
+        excel_buffer.seek(0)
+
+        st.download_button(
+            label="Download Excel Results",
+            data=excel_buffer,
+            file_name="GBM_Modeling_Results.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        # ====================================================
+        # Download trained model
+        # ====================================================
+        model_buffer = io.BytesIO()
+        joblib.dump(model, model_buffer)
+        model_buffer.seek(0)
+
+        st.download_button(
+            label="Download Trained GBM Model",
+            data=model_buffer,
+            file_name="Trained_GBM_Model.pkl",
+            mime="application/octet-stream"
+        )
 
         # ====================================================
         # Rerun message
