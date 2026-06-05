@@ -42,7 +42,7 @@ st.title("Web-Based Gradient Boosting Model Development App")
 
 st.write(
     "Download the Excel template, fill your experimental data, upload the completed file, "
-    "select the train/test ratio, and run or rerun the Gradient Boosting Machine model."
+    "select the train/test ratio, and run or rerun the Gradient Boosting model."
 )
 
 
