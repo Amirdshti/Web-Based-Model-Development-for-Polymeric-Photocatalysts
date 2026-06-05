@@ -1,12 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-Streamlit Web App for XGBoost + Optional PSO Model Development
+Created on Fri Jun  5 17:01:11 2026
+
+@author: 24550372
+"""
+
+# -*- coding: utf-8 -*-
+"""
+Streamlit Web App for GBM + Optional PSO Model Development
 
 Functions:
 1. Download Excel data template
 2. Upload completed Excel file
 3. Select train/test ratio
-4. Train or rerun XGBoost model
+4. Train or rerun Gradient Boosting model
 5. Optional PSO hyperparameter optimization
 6. Show R2, RMSE, MAPE (%)
 7. Show only R2 plot
@@ -19,7 +26,7 @@ import matplotlib.pyplot as plt
 import io
 import time
 
-from xgboost import XGBRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import r2_score
 from pyswarms.single.global_best import GlobalBestPSO
@@ -29,15 +36,15 @@ from pyswarms.single.global_best import GlobalBestPSO
 # Streamlit page setting
 # ============================================================
 st.set_page_config(
-    page_title="XGBoost Web-Based Model",
+    page_title="GBM Web-Based Model",
     layout="wide"
 )
 
-st.title("Web-Based XGBoost Model Development App")
+st.title("Web-Based Gradient Boosting Model Development App")
 
 st.write(
     "Download the Excel template, fill your experimental data, upload the completed file, "
-    "select the train/test ratio, and run or rerun the XGBoost model."
+    "select the train/test ratio, and run or rerun the Gradient Boosting model."
 )
 
 
@@ -197,7 +204,7 @@ if uploaded_file is not None:
             "Number of particles",
             min_value=5,
             max_value=50,
-            value=10,
+            value=5,
             step=5
         )
 
@@ -205,7 +212,7 @@ if uploaded_file is not None:
             "PSO iterations",
             min_value=5,
             max_value=200,
-            value=30,
+            value=100,
             step=5
         )
 
@@ -242,7 +249,7 @@ if uploaded_file is not None:
         )
 
     else:
-        st.sidebar.subheader("Manual XGBoost Parameters")
+        st.sidebar.subheader("Manual GBM Parameters")
 
         n_estimators = st.sidebar.slider(
             "n_estimators",
@@ -250,14 +257,6 @@ if uploaded_file is not None:
             max_value=1000,
             value=300,
             step=50
-        )
-
-        max_depth = st.sidebar.slider(
-            "max_depth",
-            min_value=1,
-            max_value=20,
-            value=5,
-            step=1
         )
 
         learning_rate = st.sidebar.slider(
@@ -277,28 +276,28 @@ if uploaded_file is not None:
             step=0.05
         )
 
-        colsample_bytree = st.sidebar.slider(
-            "colsample_bytree",
-            min_value=0.50,
-            max_value=1.00,
-            value=0.80,
-            step=0.05
+        min_samples_split = st.sidebar.slider(
+            "min_samples_split",
+            min_value=2,
+            max_value=100,
+            value=2,
+            step=1
         )
 
-        min_child_weight = st.sidebar.slider(
-            "min_child_weight",
-            min_value=1.0,
-            max_value=20.0,
-            value=1.0,
-            step=0.5
+        min_samples_leaf = st.sidebar.slider(
+            "min_samples_leaf",
+            min_value=1,
+            max_value=50,
+            value=1,
+            step=1
         )
 
-        gamma = st.sidebar.slider(
-            "gamma",
-            min_value=0.0,
-            max_value=10.0,
-            value=0.0,
-            step=0.1
+        max_depth = st.sidebar.slider(
+            "max_depth",
+            min_value=1,
+            max_value=30,
+            value=5,
+            step=1
         )
 
     # ========================================================
@@ -312,7 +311,7 @@ if uploaded_file is not None:
     # ========================================================
     st.subheader("Step 4: Run or Rerun Model")
 
-    if st.button("Run / Rerun XGBoost Model"):
+    if st.button("Run / Rerun GBM Model"):
 
         st.session_state.attempt += 1
 
@@ -348,26 +347,26 @@ if uploaded_file is not None:
 
                 for i in range(n_particles_local):
 
-                    n_estimators_i = int(params[i, 0])
-                    learning_rate_i = params[i, 1]
-                    subsample_i = params[i, 2]
-                    max_depth_i = int(params[i, 3])
-                    min_child_weight_i = params[i, 4]
-                    gamma_i = params[i, 5]
-                    colsample_bytree_i = params[i, 6]
+                    n_estimators_i = int(np.round(params[i, 0]))
+                    learning_rate_i = float(params[i, 1])
+                    subsample_i = float(params[i, 2])
+                    min_samples_split_i = int(np.round(params[i, 3]))
+                    min_samples_leaf_i = int(np.round(params[i, 4]))
+                    max_depth_i = int(np.round(params[i, 5]))
 
-                    temp_model = XGBRegressor(
+                    # Safety correction
+                    min_samples_split_i = max(min_samples_split_i, 2)
+                    min_samples_leaf_i = max(min_samples_leaf_i, 1)
+                    max_depth_i = max(max_depth_i, 1)
+
+                    temp_model = GradientBoostingRegressor(
                         n_estimators=n_estimators_i,
                         learning_rate=learning_rate_i,
                         subsample=subsample_i,
+                        min_samples_split=min_samples_split_i,
+                        min_samples_leaf=min_samples_leaf_i,
                         max_depth=max_depth_i,
-                        min_child_weight=min_child_weight_i,
-                        gamma=gamma_i,
-                        colsample_bytree=colsample_bytree_i,
-                        objective="reg:squarederror",
-                        n_jobs=-1,
-                        random_state=random_seed,
-                        verbosity=0
+                        random_state=random_seed
                     )
 
                     score = cross_val_score(
@@ -383,22 +382,21 @@ if uploaded_file is not None:
 
                 return np.array(scores)
 
-            # These are the 7 optimized XGBoost hyperparameters:
+            # These are the 6 optimized GBM hyperparameters:
             # 1. n_estimators
             # 2. learning_rate
             # 3. subsample
-            # 4. max_depth
-            # 5. min_child_weight
-            # 6. gamma
-            # 7. colsample_bytree
+            # 4. min_samples_split
+            # 5. min_samples_leaf
+            # 6. max_depth
             bounds = (
-                [50, 0.01, 0.50, 2, 1, 0, 0.30],
-                [500, 0.30, 1.00, 15, 20, 10, 1.00]
+                [50, 0.01, 0.50, 2, 1, 1],
+                [300, 0.30, 1.00, 100, 50, 30]
             )
 
             optimizer = GlobalBestPSO(
                 n_particles=n_particles,
-                dimensions=7,
+                dimensions=6,
                 options={
                     "c1": c1,
                     "c2": c2,
@@ -414,14 +412,18 @@ if uploaded_file is not None:
             )
 
             best_params = {
-                "n_estimators": int(best_pos[0]),
+                "n_estimators": int(np.round(best_pos[0])),
                 "learning_rate": float(best_pos[1]),
                 "subsample": float(best_pos[2]),
-                "max_depth": int(best_pos[3]),
-                "min_child_weight": float(best_pos[4]),
-                "gamma": float(best_pos[5]),
-                "colsample_bytree": float(best_pos[6])
+                "min_samples_split": int(np.round(best_pos[3])),
+                "min_samples_leaf": int(np.round(best_pos[4])),
+                "max_depth": int(np.round(best_pos[5]))
             }
+
+            # Safety correction
+            best_params["min_samples_split"] = max(best_params["min_samples_split"], 2)
+            best_params["min_samples_leaf"] = max(best_params["min_samples_leaf"], 1)
+            best_params["max_depth"] = max(best_params["max_depth"], 1)
 
             progress_placeholder.success("PSO optimization completed.")
 
@@ -431,21 +433,17 @@ if uploaded_file is not None:
                 "n_estimators": int(n_estimators),
                 "learning_rate": float(learning_rate),
                 "subsample": float(subsample),
-                "max_depth": int(max_depth),
-                "min_child_weight": float(min_child_weight),
-                "gamma": float(gamma),
-                "colsample_bytree": float(colsample_bytree)
+                "min_samples_split": int(min_samples_split),
+                "min_samples_leaf": int(min_samples_leaf),
+                "max_depth": int(max_depth)
             }
 
         # ----------------------------------------------------
-        # Final XGBoost model
+        # Final GBM model
         # ----------------------------------------------------
-        model = XGBRegressor(
+        model = GradientBoostingRegressor(
             **best_params,
-            objective="reg:squarederror",
-            random_state=random_seed,
-            n_jobs=-1,
-            verbosity=0
+            random_state=random_seed
         )
 
         model.fit(X_train, y_train)
@@ -553,7 +551,7 @@ if uploaded_file is not None:
 
         ax.set_xlabel("Experimental Degradation (%)", fontsize=12)
         ax.set_ylabel("Predicted Degradation (%)", fontsize=12)
-        ax.set_title("XGBoost Model R² Plot", fontsize=14)
+        ax.set_title("GBM-PSO R² Plot", fontsize=14)
 
         ax.text(
             0.05,
@@ -588,7 +586,7 @@ if uploaded_file is not None:
                 **best_params,
                 "use_pso": use_pso,
                 "n_particles": n_particles,
-                "dimensions": 7,
+                "dimensions": 6,
                 "pso_iterations": pso_iterations,
                 "c1": c1,
                 "c2": c2,
@@ -614,7 +612,7 @@ if uploaded_file is not None:
         # ====================================================
         if r2_test < 0.80:
             st.warning(
-                "The test R² is relatively low. Click 'Run / Rerun XGBoost Model' again "
+                "The test R² is relatively low. Click 'Run / Rerun GBM Model' again "
                 "to try another random train/test split."
             )
         else:
