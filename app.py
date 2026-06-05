@@ -15,6 +15,7 @@ Functions:
    - Sheet 2: hyperparameters + statistical results
 9. Download trained GBM model as .pkl
 10. Show PSO progress during optimization
+11. Keep results visible after download using st.session_state
 """
 
 import streamlit as st
@@ -70,6 +71,104 @@ def compute_mape(y_true, y_pred):
     ) * 100
 
 
+def make_r2_plot(y_train, y_test, y_train_pred, y_test_pred, r2_train, r2_test, r2_all, rmse_test, mape_test):
+    y_all = np.concatenate([y_train, y_test])
+    y_all_pred = np.concatenate([y_train_pred, y_test_pred])
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+
+    ax.scatter(
+        y_train,
+        y_train_pred,
+        label="Train data",
+        s=35,
+        marker="o"
+    )
+
+    ax.scatter(
+        y_test,
+        y_test_pred,
+        label="Test data",
+        s=35,
+        marker="s"
+    )
+
+    min_val = min(y_all.min(), y_all_pred.min())
+    max_val = max(y_all.max(), y_all_pred.max())
+
+    ax.plot(
+        [min_val, max_val],
+        [min_val, max_val],
+        "--",
+        label="45° line"
+    )
+
+    p = np.polyfit(y_all, y_all_pred, 1)
+    fit_line = np.polyval(p, y_all)
+    sorted_index = np.argsort(y_all)
+
+    ax.plot(
+        y_all[sorted_index],
+        fit_line[sorted_index],
+        "-",
+        label="Best-fit line"
+    )
+
+    ax.set_xlabel("Experimental Degradation (%)", fontsize=12)
+    ax.set_ylabel("Predicted Degradation (%)", fontsize=12)
+    ax.set_title("GBM-PSO R² Plot", fontsize=14)
+
+    ax.text(
+        0.05,
+        0.95,
+        f"Train R² = {r2_train:.4f}\n"
+        f"Test R² = {r2_test:.4f}\n"
+        f"All R² = {r2_all:.4f}\n"
+        f"Test RMSE = {rmse_test:.4f}\n"
+        f"Test MAPE = {mape_test:.2f}%",
+        transform=ax.transAxes,
+        fontsize=11,
+        verticalalignment="top",
+        bbox=dict(
+            boxstyle="round",
+            facecolor="white",
+            alpha=0.8
+        )
+    )
+
+    ax.legend()
+    ax.grid(False)
+
+    return fig
+
+
+def create_excel_results(results_df, summary_df):
+    excel_buffer = io.BytesIO()
+
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        results_df.to_excel(
+            writer,
+            sheet_name="GBM Results",
+            index=False
+        )
+
+        summary_df.to_excel(
+            writer,
+            sheet_name="Hyperparameters_Statistics",
+            index=False
+        )
+
+    excel_buffer.seek(0)
+    return excel_buffer
+
+
+def create_model_download(model):
+    model_buffer = io.BytesIO()
+    joblib.dump(model, model_buffer)
+    model_buffer.seek(0)
+    return model_buffer
+
+
 # ============================================================
 # Excel template columns
 # ============================================================
@@ -101,6 +200,16 @@ def create_excel_template():
 
     output.seek(0)
     return output
+
+
+# ============================================================
+# Initialize session state
+# ============================================================
+if "attempt" not in st.session_state:
+    st.session_state.attempt = 0
+
+if "model_trained" not in st.session_state:
+    st.session_state.model_trained = False
 
 
 # ============================================================
@@ -300,21 +409,16 @@ if uploaded_file is not None:
         )
 
     # ========================================================
-    # Session state for rerun attempt
-    # ========================================================
-    if "attempt" not in st.session_state:
-        st.session_state.attempt = 0
-
-    # ========================================================
     # Step 4: Run model
     # ========================================================
     st.subheader("Step 4: Run or Rerun Model")
 
-    if st.button("Run / Rerun GBM Model"):
+    run_model = st.button("Run / Rerun GBM Model")
+
+    if run_model:
 
         st.session_state.attempt += 1
 
-        # Different random seed every click
         random_seed = int(time.time()) + st.session_state.attempt
 
         # ----------------------------------------------------
@@ -356,7 +460,6 @@ if uploaded_file is not None:
                     min_samples_leaf_i = int(np.round(params[i, 4]))
                     max_depth_i = int(np.round(params[i, 5]))
 
-                    # Safety correction
                     min_samples_split_i = max(min_samples_split_i, 2)
                     min_samples_leaf_i = max(min_samples_leaf_i, 1)
                     max_depth_i = max(max_depth_i, 1)
@@ -384,13 +487,6 @@ if uploaded_file is not None:
 
                 return np.array(scores)
 
-            # These are the 6 optimized GBM hyperparameters:
-            # 1. n_estimators
-            # 2. learning_rate
-            # 3. subsample
-            # 4. min_samples_split
-            # 5. min_samples_leaf
-            # 6. max_depth
             bounds = (
                 [50, 0.01, 0.50, 2, 1, 1],
                 [300, 0.30, 1.00, 100, 50, 30]
@@ -407,9 +503,6 @@ if uploaded_file is not None:
                 bounds=bounds
             )
 
-            # ====================================================
-            # PSO progress display
-            # ====================================================
             progress_bar = st.progress(0)
             progress_text = st.empty()
             current_best_text = st.empty()
@@ -450,10 +543,19 @@ if uploaded_file is not None:
                 "max_depth": int(np.round(best_pos[5]))
             }
 
-            # Safety correction
             best_params["min_samples_split"] = max(best_params["min_samples_split"], 2)
             best_params["min_samples_leaf"] = max(best_params["min_samples_leaf"], 1)
             best_params["max_depth"] = max(best_params["max_depth"], 1)
+
+            pso_settings_saved = {
+                "n_particles": n_particles,
+                "dimensions": 6,
+                "pso_iterations": pso_iterations,
+                "c1": c1,
+                "c2": c2,
+                "w": w,
+                "cv_folds": cv_folds
+            }
 
         else:
 
@@ -464,6 +566,16 @@ if uploaded_file is not None:
                 "min_samples_split": int(min_samples_split),
                 "min_samples_leaf": int(min_samples_leaf),
                 "max_depth": int(max_depth)
+            }
+
+            pso_settings_saved = {
+                "n_particles": None,
+                "dimensions": None,
+                "pso_iterations": None,
+                "c1": None,
+                "c2": None,
+                "w": None,
+                "cv_folds": None
             }
 
         # ----------------------------------------------------
@@ -500,141 +612,9 @@ if uploaded_file is not None:
         mape_test = compute_mape(y_test, y_test_pred)
         mape_all = compute_mape(y_all, y_all_pred)
 
-        # ====================================================
-        # Show results
-        # ====================================================
-        st.subheader("Model Results")
-
-        st.write(f"Model attempt number: **{st.session_state.attempt}**")
-
-        col1, col2, col3 = st.columns(3)
-
-        col1.metric("Train R²", f"{r2_train:.4f}")
-        col2.metric("Test R²", f"{r2_test:.4f}")
-        col3.metric("All Data R²", f"{r2_all:.4f}")
-
-        col4, col5, col6 = st.columns(3)
-
-        col4.metric("Train RMSE", f"{rmse_train:.4f}")
-        col5.metric("Test RMSE", f"{rmse_test:.4f}")
-        col6.metric("All Data RMSE", f"{rmse_all:.4f}")
-
-        col7, col8, col9 = st.columns(3)
-
-        col7.metric("Train MAPE (%)", f"{mape_train:.2f}")
-        col8.metric("Test MAPE (%)", f"{mape_test:.2f}")
-        col9.metric("All Data MAPE (%)", f"{mape_all:.2f}")
-
-        # ====================================================
-        # R2 plot
-        # ====================================================
-        st.subheader("R² Plot")
-
-        fig, ax = plt.subplots(figsize=(7, 7))
-
-        ax.scatter(
-            y_train,
-            y_train_pred,
-            label="Train data",
-            s=35,
-            marker="o"
-        )
-
-        ax.scatter(
-            y_test,
-            y_test_pred,
-            label="Test data",
-            s=35,
-            marker="s"
-        )
-
-        min_val = min(y_all.min(), y_all_pred.min())
-        max_val = max(y_all.max(), y_all_pred.max())
-
-        ax.plot(
-            [min_val, max_val],
-            [min_val, max_val],
-            "--",
-            label="45° line"
-        )
-
-        # Best-fit line
-        p = np.polyfit(y_all, y_all_pred, 1)
-        fit_line = np.polyval(p, y_all)
-
-        sorted_index = np.argsort(y_all)
-
-        ax.plot(
-            y_all[sorted_index],
-            fit_line[sorted_index],
-            "-",
-            label="Best-fit line"
-        )
-
-        ax.set_xlabel("Experimental Degradation (%)", fontsize=12)
-        ax.set_ylabel("Predicted Degradation (%)", fontsize=12)
-        ax.set_title("GBM-PSO R² Plot", fontsize=14)
-
-        ax.text(
-            0.05,
-            0.95,
-            f"Train R² = {r2_train:.4f}\n"
-            f"Test R² = {r2_test:.4f}\n"
-            f"All R² = {r2_all:.4f}\n"
-            f"Test RMSE = {rmse_test:.4f}\n"
-            f"Test MAPE = {mape_test:.2f}%",
-            transform=ax.transAxes,
-            fontsize=11,
-            verticalalignment="top",
-            bbox=dict(
-                boxstyle="round",
-                facecolor="white",
-                alpha=0.8
-            )
-        )
-
-        ax.legend()
-        ax.grid(False)
-
-        st.pyplot(fig)
-
-        # ====================================================
-        # Model parameters table
-        # ====================================================
-        st.subheader("Model Parameters")
-
-        if use_pso:
-            params_df = pd.DataFrame([{
-                **best_params,
-                "use_pso": use_pso,
-                "n_particles": n_particles,
-                "dimensions": 6,
-                "pso_iterations": pso_iterations,
-                "c1": c1,
-                "c2": c2,
-                "w": w,
-                "cv_folds": cv_folds,
-                "random_seed": random_seed,
-                "train_percent": train_percent,
-                "test_percent": test_percent
-            }])
-        else:
-            params_df = pd.DataFrame([{
-                **best_params,
-                "use_pso": use_pso,
-                "random_seed": random_seed,
-                "train_percent": train_percent,
-                "test_percent": test_percent
-            }])
-
-        st.dataframe(params_df)
-
-        # ====================================================
-        # Prepare Excel results
-        # ====================================================
-        st.subheader("Download Results and Trained Model")
-
-        # Sheet 1: original data + predictions + train/test label
+        # ----------------------------------------------------
+        # Results dataframe
+        # ----------------------------------------------------
         train_results_df = df.iloc[train_indices].copy()
         train_results_df["Predicted Degradation (%)"] = y_train_pred
         train_results_df["Data Set"] = "Train"
@@ -648,18 +628,20 @@ if uploaded_file is not None:
             ignore_index=True
         )
 
-        # Sheet 2: hyperparameters + statistical results
+        # ----------------------------------------------------
+        # Summary dataframe
+        # ----------------------------------------------------
         summary_df = pd.DataFrame([{
             **best_params,
 
             "use_pso": use_pso,
-            "n_particles": n_particles if use_pso else None,
-            "dimensions": 6 if use_pso else None,
-            "pso_iterations": pso_iterations if use_pso else None,
-            "c1": c1 if use_pso else None,
-            "c2": c2 if use_pso else None,
-            "w": w if use_pso else None,
-            "cv_folds": cv_folds if use_pso else None,
+            "n_particles": pso_settings_saved["n_particles"],
+            "dimensions": pso_settings_saved["dimensions"],
+            "pso_iterations": pso_settings_saved["pso_iterations"],
+            "c1": pso_settings_saved["c1"],
+            "c2": pso_settings_saved["c2"],
+            "w": pso_settings_saved["w"],
+            "cv_folds": pso_settings_saved["cv_folds"],
 
             "random_seed": random_seed,
             "train_percent": train_percent,
@@ -678,22 +660,97 @@ if uploaded_file is not None:
             "MAPE_all_percent": mape_all
         }])
 
-        excel_buffer = io.BytesIO()
+        # ----------------------------------------------------
+        # Save all important results in session state
+        # ----------------------------------------------------
+        st.session_state.model_trained = True
 
-        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            results_df.to_excel(
-                writer,
-                sheet_name="GBM Results",
-                index=False
-            )
+        st.session_state.model = model
+        st.session_state.best_params = best_params
+        st.session_state.params_df = summary_df
+        st.session_state.results_df = results_df
+        st.session_state.summary_df = summary_df
 
-            summary_df.to_excel(
-                writer,
-                sheet_name="Hyperparameters_Statistics",
-                index=False
-            )
+        st.session_state.y_train = y_train
+        st.session_state.y_test = y_test
+        st.session_state.y_train_pred = y_train_pred
+        st.session_state.y_test_pred = y_test_pred
 
-        excel_buffer.seek(0)
+        st.session_state.r2_train = r2_train
+        st.session_state.r2_test = r2_test
+        st.session_state.r2_all = r2_all
+
+        st.session_state.rmse_train = rmse_train
+        st.session_state.rmse_test = rmse_test
+        st.session_state.rmse_all = rmse_all
+
+        st.session_state.mape_train = mape_train
+        st.session_state.mape_test = mape_test
+        st.session_state.mape_all = mape_all
+
+    # ========================================================
+    # Display saved results
+    # This part runs even after download buttons are clicked.
+    # ========================================================
+    if st.session_state.model_trained:
+
+        st.subheader("Model Results")
+
+        st.write(f"Model attempt number: **{st.session_state.attempt}**")
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Train R²", f"{st.session_state.r2_train:.4f}")
+        col2.metric("Test R²", f"{st.session_state.r2_test:.4f}")
+        col3.metric("All Data R²", f"{st.session_state.r2_all:.4f}")
+
+        col4, col5, col6 = st.columns(3)
+
+        col4.metric("Train RMSE", f"{st.session_state.rmse_train:.4f}")
+        col5.metric("Test RMSE", f"{st.session_state.rmse_test:.4f}")
+        col6.metric("All Data RMSE", f"{st.session_state.rmse_all:.4f}")
+
+        col7, col8, col9 = st.columns(3)
+
+        col7.metric("Train MAPE (%)", f"{st.session_state.mape_train:.2f}")
+        col8.metric("Test MAPE (%)", f"{st.session_state.mape_test:.2f}")
+        col9.metric("All Data MAPE (%)", f"{st.session_state.mape_all:.2f}")
+
+        # ----------------------------------------------------
+        # R2 plot
+        # ----------------------------------------------------
+        st.subheader("R² Plot")
+
+        fig = make_r2_plot(
+            st.session_state.y_train,
+            st.session_state.y_test,
+            st.session_state.y_train_pred,
+            st.session_state.y_test_pred,
+            st.session_state.r2_train,
+            st.session_state.r2_test,
+            st.session_state.r2_all,
+            st.session_state.rmse_test,
+            st.session_state.mape_test
+        )
+
+        st.pyplot(fig)
+
+        # ----------------------------------------------------
+        # Model parameters
+        # ----------------------------------------------------
+        st.subheader("Model Parameters")
+
+        st.dataframe(st.session_state.summary_df)
+
+        # ----------------------------------------------------
+        # Downloads
+        # ----------------------------------------------------
+        st.subheader("Download Results and Trained Model")
+
+        excel_buffer = create_excel_results(
+            st.session_state.results_df,
+            st.session_state.summary_df
+        )
 
         st.download_button(
             label="Download Excel Results",
@@ -702,12 +759,7 @@ if uploaded_file is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # ====================================================
-        # Download trained model
-        # ====================================================
-        model_buffer = io.BytesIO()
-        joblib.dump(model, model_buffer)
-        model_buffer.seek(0)
+        model_buffer = create_model_download(st.session_state.model)
 
         st.download_button(
             label="Download Trained GBM Model",
@@ -716,10 +768,7 @@ if uploaded_file is not None:
             mime="application/octet-stream"
         )
 
-        # ====================================================
-        # Rerun message
-        # ====================================================
-        if r2_test < 0.80:
+        if st.session_state.r2_test < 0.80:
             st.warning(
                 "The test R² is relatively low. Click 'Run / Rerun GBM Model' again "
                 "to try another random train/test split."
